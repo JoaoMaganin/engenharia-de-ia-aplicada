@@ -114,7 +114,7 @@ function encodeProduct(product, context) {
     return tf.concat1d([price, age, category, color]);
 }
 
-function encondeUser(user, context) {
+function encodeUser(user, context) {
     if (user.purchases.length) {
         return tf.stack(
             user.purchases.map(
@@ -128,18 +128,21 @@ function encondeUser(user, context) {
 function createTrainingData(context) {
     const inputs = [];
     const labels = [];
-    context.users.forEach(user => {
-        const userVector = encondeUser(user, context).dataSync()
-        context.products.forEach(product => {
-            const productVector = encodeProduct(product, context).dataSync()
+    context.users
+        .filter(u => u.purchases.length)
+        .forEach(user => {
+            const userVector = encodeUser(user, context).dataSync()
+            context.products
+                .forEach(product => {
+                    const productVector = encodeProduct(product, context).dataSync()
 
-            const label = user.purchases.some(p => p.name === product.name ? 1 : 0)
+                    const label = user.purchases.some(p => p.name === product.name ? 1 : 0)
 
-            // combinar user + product
-            inputs.push([...userVector, ...productVector]);
-            labels.push(label);
+                    // combinar user + product
+                    inputs.push([...userVector, ...productVector]);
+                    labels.push(label);
+                })
         })
-    })
 
     return {
         xs: tf.tensor2d(inputs),
@@ -147,6 +150,68 @@ function createTrainingData(context) {
         inputDimensions: context.dimentions * 2
         // tamanho = userVector + productVector
     }
+}
+
+async function configureNeuralNetAndTrain(trainData) {
+
+    const model = tf.sequential();
+    model.add(
+        tf.layers.dense({
+            inputShape: [trainData.inputDimensions],
+            units: 128,
+            activation: 'relu'
+        }
+        ))
+
+    model.add(
+        tf.layers.dense({
+            inputShape: [trainData.inputDimensions],
+            units: 64,
+            activation: 'relu'
+        }
+        ))
+
+    model.add(
+        tf.layers.dense({
+            inputShape: [trainData.inputDimensions],
+            units: 32,
+            activation: 'relu'
+        }
+        ))
+
+
+    // Camada de saída
+    // 1 neurônio porque vamos retornar apenas uma pontuação de recomendação
+    // activation: 'sigmoid' comprime o resultado para o invervalo 0-1
+    // exemplo: 0.9 = recomendação forte, 0.1 = recomendação fraca
+    model.add(
+        tf.layers.dense({
+            units: 1,
+            activation: 'sigmoid'
+        })
+    )
+
+    model.compile({
+        optimizer: tf.train.adam(0.01),
+        loss: 'binaryCrossentropy',
+        metrics: ['accuracy']
+    })
+
+    await model.fit(trainData.xs, trainData.ys, {
+        epochs: 100,
+        batchSize: 32,
+        shuffle: true,
+        callbacks: {
+            onEpochEnd: (epoch, logs) => {
+                postMessage({
+                    type: workerEvents.trainingLog,
+                    epoch: epoch,
+                    loss: logs.loss,
+                    accuracy: logs.acc
+                })
+            }
+        }
+    });
 }
 
 async function trainModel({ users }) {
@@ -166,7 +231,8 @@ async function trainModel({ users }) {
     _globalCtx = context
 
     const trainData = createTrainingData(context);
-    debugger
+    _model = await configureNeuralNetAndTrain(trainData);
+
     postMessage({ type: workerEvents.progressUpdate, progress: { progress: 100 } });
     postMessage({ type: workerEvents.trainingComplete });
 }
