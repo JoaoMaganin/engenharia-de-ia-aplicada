@@ -5,6 +5,7 @@ export default defineConfig({
   timeout: 5000,
   use: {
     baseURL: 'https://erickwendel.github.io',
+    channel: 'chromium',
     headless: true,
     trace: 'on-first-retry',
   },
